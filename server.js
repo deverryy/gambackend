@@ -20,7 +20,7 @@ function isAllowed(origin) {
     return ALLOWED_ORIGINS.some(o => origin && origin.startsWith(o));
 }
 
-/* ── Persistent data (clicks + blocked sessions) ── */
+/* ── Persistent data (clicks + blocked sessions)) ── */
 function loadData() {
     try { if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); }
     catch (_) {}
