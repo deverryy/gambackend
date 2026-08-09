@@ -184,6 +184,22 @@ app.delete('/api/popular', requireAdmin, (req, res) => {
     res.json({ ok: true, cleared });
 });
 
+app.delete('/api/popular/:name', requireAdmin, (req, res) => {
+    let name = '';
+    try { name = decodeURIComponent(req.params.name || ''); } catch (_) { name = req.params.name || ''; }
+    name = String(name).trim();
+    if (!name) return res.status(400).json({ error: 'missing game name' });
+
+    if (!Object.prototype.hasOwnProperty.call(siteData.clicks || {}, name)) {
+        return res.status(404).json({ error: 'game not tracked' });
+    }
+
+    delete siteData.clicks[name];
+    scheduleSave();
+    broadcastStats();
+    res.json({ ok: true, removed: name, tracked: trackedCount() });
+});
+
 app.get('/api/admin/sessions', requireAdmin, (req, res) => {
     res.json({
         online: clients.size,
