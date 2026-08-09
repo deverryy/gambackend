@@ -20,7 +20,7 @@ function isAllowed(origin) {
     return ALLOWED_ORIGINS.some(o => origin && origin.startsWith(o));
 }
 
-/* ── Persistent data (clicks + blocked sessions)) ── */
+/* ── Persistent data (clicks + blocked sessions) ── */
 function loadData() {
     try { if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); }
     catch (_) {}
@@ -40,7 +40,7 @@ function scheduleSave() {
 }
 
 /* ── Online users ── */
-const clients = new Set();
+const clients = new Map(); // ws -> { id, connectedAt }
 
 function getTopGames(n) {
     return Object.entries(siteData.clicks)
@@ -49,13 +49,37 @@ function getTopGames(n) {
         .map(([name, clicks]) => ({ name, clicks }));
 }
 
+function getActiveSessions() {
+    const byId = new Map();
+    clients.forEach((meta, ws) => {
+        if (ws.readyState !== ws.OPEN) return;
+        if (!meta || !meta.id) return;
+        const existing = byId.get(meta.id);
+        if (existing) {
+            existing.connections += 1;
+            if (meta.connectedAt < existing.connectedAt) existing.connectedAt = meta.connectedAt;
+        } else {
+            byId.set(meta.id, {
+                id: meta.id,
+                connections: 1,
+                connectedAt: meta.connectedAt
+            });
+        }
+    });
+    return Array.from(byId.values()).sort((a, b) => a.connectedAt - b.connectedAt);
+}
+
 function broadcastStats() {
     const payload = JSON.stringify({
         type:    'stats',
         online:  clients.size,
         popular: getTopGames(15)
     });
-    clients.forEach(ws => { if (ws.readyState === ws.OPEN) ws.send(payload); });
+    clients.forEach((_, ws) => { if (ws.readyState === ws.OPEN) ws.send(payload); });
+}
+
+function trackedCount() {
+    return Object.keys(siteData.clicks || {}).length;
 }
 
 function isBlocked(id) {
@@ -66,7 +90,7 @@ function broadcastBlockedList() {
     // let every connected client know the block list changed, so a user who
     // gets blocked mid-session is kicked out immediately, not just on refresh
     const payload = JSON.stringify({ type: 'blocklist', blocked: siteData.blocked.map(s => s.id) });
-    clients.forEach(ws => { if (ws.readyState === ws.OPEN) ws.send(payload); });
+    clients.forEach((_, ws) => { if (ws.readyState === ws.OPEN) ws.send(payload); });
 }
 
 /* ── WebSocket ── */
@@ -74,12 +98,22 @@ wss.on('connection', (ws, req) => {
     const origin = req.headers.origin || '';
     if (!isAllowed(origin)) { ws.close(1008, 'Forbidden'); return; }
 
-    clients.add(ws);
+    clients.set(ws, { id: null, connectedAt: Date.now() });
     broadcastStats();
 
     ws.on('message', raw => {
         let msg;
         try { msg = JSON.parse(raw); } catch (_) { return; }
+
+        if ((msg.type === 'hello' || msg.type === 'identify') && typeof msg.id === 'string') {
+            const id = msg.id.trim();
+            if (/^\d{5}$/.test(id)) {
+                const meta = clients.get(ws) || { connectedAt: Date.now() };
+                meta.id = id;
+                clients.set(ws, meta);
+            }
+            return;
+        }
 
         if (msg.type === 'click' && typeof msg.name === 'string') {
             const name = msg.name.slice(0, 120).replace(/[^\w\s'\-.,!()]/g, '');
@@ -125,7 +159,7 @@ app.post('/api/admin/verify', (req, res) => {
 });
 
 app.get('/api/stats', (req, res) => {
-    res.json({ online: clients.size, popular: getTopGames(15) });
+    res.json({ online: clients.size, popular: getTopGames(15), tracked: trackedCount() });
 });
 
 app.post('/api/click', (req, res) => {
@@ -139,7 +173,29 @@ app.post('/api/click', (req, res) => {
 });
 
 app.get('/api/popular', (req, res) => {
-    res.json(getTopGames(Math.min(parseInt(req.query.n) || 15, 50)));
+    res.json(getTopGames(Math.min(parseInt(req.query.n) || 15, 200)));
+});
+
+app.delete('/api/popular', requireAdmin, (req, res) => {
+    const cleared = Object.keys(siteData.clicks || {}).length;
+    siteData.clicks = {};
+    scheduleSave();
+    broadcastStats();
+    res.json({ ok: true, cleared });
+});
+
+app.get('/api/admin/sessions', requireAdmin, (req, res) => {
+    res.json({
+        online: clients.size,
+        sessions: getActiveSessions()
+    });
+});
+
+app.get('/api/admin/popular', requireAdmin, (req, res) => {
+    res.json({
+        tracked: trackedCount(),
+        games: getTopGames(9999)
+    });
 });
 
 /* ── Session block API ──
