@@ -11,6 +11,11 @@ const wss    = new WebSocketServer({ server });
 const PORT      = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data.json');
 const ADMIN_CODE = process.env.ADMIN_CODE || 'deveriscool';
+const STARTED_AT = Date.now();
+
+function getUptimeSeconds() {
+    return Math.floor(process.uptime());
+}
 
 /* ── Allowed frontend origins (set your Vercel URL in Railway env vars) ── */
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim());
@@ -159,7 +164,13 @@ app.post('/api/admin/verify', (req, res) => {
 });
 
 app.get('/api/stats', (req, res) => {
-    res.json({ online: clients.size, popular: getTopGames(15), tracked: trackedCount() });
+    res.json({
+        online: clients.size,
+        popular: getTopGames(15),
+        tracked: trackedCount(),
+        uptime: getUptimeSeconds(),
+        startedAt: new Date(STARTED_AT).toISOString()
+    });
 });
 
 app.post('/api/click', (req, res) => {
@@ -244,7 +255,12 @@ app.delete('/api/blocked-sessions/:id', requireAdmin, (req, res) => {
     res.json({ ok: true, blocked: siteData.blocked });
 });
 
-app.get('/health', (req, res) => res.json({ ok: true, online: clients.size }));
+app.get('/health', (req, res) => res.json({
+    ok: true,
+    online: clients.size,
+    uptime: getUptimeSeconds(),
+    startedAt: new Date(STARTED_AT).toISOString()
+}));
 
 /* ── Start ── */
 server.listen(PORT, () => {
